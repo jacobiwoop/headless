@@ -1,9 +1,25 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const { chromium } = require('playwright');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Configuration Multer pour recevoir des fichiers
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/javascript' || 
+        file.mimetype === 'text/javascript' ||
+        file.originalname.endsWith('.js')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Seuls les fichiers .js sont acceptés'));
+    }
+  }
+});
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -13,7 +29,11 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'online', 
     service: 'Headless Browser API',
-    endpoints: ['/run', '/health']
+    endpoints: [
+      { path: '/run', method: 'POST', description: 'Exécuter un script (JSON)' },
+      { path: '/run-file', method: 'POST', description: 'Exécuter un fichier .js' },
+      { path: '/health', method: 'GET', description: 'Vérifier le statut' }
+    ]
   });
 });
 
@@ -32,6 +52,26 @@ app.post('/run', async (req, res) => {
     });
   }
 
+  await executeScript(script, timeout, res);
+});
+
+// Nouvelle route pour recevoir un fichier .js
+app.post('/run-file', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      status: 'error',
+      error: { message: 'Aucun fichier reçu. Utilisez le champ "file" pour envoyer un .js' }
+    });
+  }
+
+  const script = req.file.buffer.toString('utf-8');
+  const timeout = parseInt(req.body.timeout) || 60000;
+
+  await executeScript(script, timeout, res);
+});
+
+// Fonction commune d'exécution
+async function executeScript(script, timeout, res) {
   let browser = null;
 
   try {
@@ -102,7 +142,7 @@ app.post('/run', async (req, res) => {
       }
     });
   }
-});
+}
 
 // Gestion des erreurs globales
 app.use((err, req, res, next) => {
