@@ -4,11 +4,11 @@ FROM mcr.microsoft.com/playwright:v1.40.0-jammy
 # Définir le répertoire de travail
 WORKDIR /app
 
-# Copier les fichiers package.json et package-lock.json
+# Copier les fichiers package.jsonz
 COPY package*.json ./
 
 # Installer les dépendances Node.js
-RUN npm ci --only=production
+RUN npm install --production
 
 # Copier tout le code source
 COPY . .
