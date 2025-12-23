@@ -1,10 +1,10 @@
 # Utiliser l'image officielle Playwright avec Node.js
-FROM mcr.microsoft.com/playwright:v1.40.0-jammy
+FROM mcr.microsoft.com/playwright:v1.49.0-jammy
 
 # Définir le répertoire de travail
 WORKDIR /app
 
-# Copier les fichiers package.jsonz
+# Copier les fichiers package.json
 COPY package*.json ./
 
 # Installer les dépendances Node.js
