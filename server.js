@@ -1,7 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { chromium } = require('playwright');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+
+// Activer le plugin stealth
+puppeteer.use(StealthPlugin());
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,7 +32,8 @@ app.use(express.json({ limit: '10mb' }));
 app.get('/', (req, res) => {
   res.json({ 
     status: 'online', 
-    service: 'Headless Browser API',
+    service: 'Headless Browser API with Stealth',
+    browser: 'Puppeteer + Stealth Plugin',
     endpoints: [
       { path: '/run', method: 'POST', description: 'Exécuter un script (JSON)' },
       { path: '/run-file', method: 'POST', description: 'Exécuter un fichier .js' },
@@ -70,44 +75,53 @@ app.post('/run-file', upload.single('file'), async (req, res) => {
   await executeScript(script, timeout, res);
 });
 
-// Fonction commune d'exécution
+// Fonction commune d'exécution avec Puppeteer + Stealth
 async function executeScript(script, timeout, res) {
   let browser = null;
 
   try {
-    // Lancer le navigateur headless
-    browser = await chromium.launch({
-      headless: true,
+    console.log('[INFO] Lancement du navigateur avec Stealth Plugin...');
+    
+    // Lancer Puppeteer avec stealth
+    browser = await puppeteer.launch({
+      headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1920,1080'
+      ],
+      ignoreHTTPSErrors: true
     });
 
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    const page = await browser.newPage();
+
+    // Configuration supplémentaire
+    await page.setViewport({ width: 1920, height: 1080 });
+    
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    // Headers supplémentaires
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1'
     });
 
-    const page = await context.newPage();
-
-    // Créer un environnement d'exécution sécurisé
-    const executionEnv = {
-      page,
-      context,
-      browser,
-      console: {
-        log: (...args) => console.log('[Script]', ...args)
-      }
-    };
+    console.log('[INFO] Exécution du script utilisateur...');
 
     // Exécuter le script avec timeout
-    const executeScript = new Promise(async (resolve, reject) => {
+    const executeScriptPromise = new Promise(async (resolve, reject) => {
       try {
         const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-        const userFunction = new AsyncFunction('page', 'context', 'browser', script);
-        const result = await userFunction(page, context, browser);
+        const userFunction = new AsyncFunction('page', 'browser', script);
+        const result = await userFunction(page, browser);
         resolve(result);
       } catch (err) {
         reject(err);
@@ -118,8 +132,10 @@ async function executeScript(script, timeout, res) {
       setTimeout(() => reject(new Error('Timeout dépassé')), timeout)
     );
 
-    const result = await Promise.race([executeScript, timeoutPromise]);
+    const result = await Promise.race([executeScriptPromise, timeoutPromise]);
 
+    console.log('[INFO] Script exécuté avec succès');
+    
     await browser.close();
 
     res.json({
@@ -132,7 +148,7 @@ async function executeScript(script, timeout, res) {
       await browser.close().catch(() => {});
     }
 
-    console.error('Erreur:', error);
+    console.error('[ERREUR]', error);
 
     res.status(500).json({
       status: 'error',
@@ -154,6 +170,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Service Headless Browser démarré sur le port ${PORT}`);
-  console.log(`📡 Endpoint principal: POST /run`);
+  console.log(`🚀 Service Headless Browser avec Stealth démarré sur le port ${PORT}`);
+  console.log(`📡 Endpoint principal: POST /run et POST /run-file`);
+  console.log(`🛡️ Protection anti-détection: ACTIVÉE`);
 });
