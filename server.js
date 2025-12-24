@@ -37,6 +37,9 @@ app.use(express.json({ limit: '10mb' }));
 let BROWSER = null;
 async function getBrowser() {
   if (BROWSER) return BROWSER;
+  
+  console.log('[INFO] Lancement du navigateur avec Stealth...');
+  
   BROWSER = await puppeteer.launch({
     headless: 'new',
     args: [
@@ -44,47 +47,89 @@ async function getBrowser() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
+      '--window-size=1920,1080',
       '--no-zygote',
       '--single-process'
     ],
-    // Render fournit souvent CHROME_PATH via Puppeteer install
     executablePath: process.env.CHROME_PATH || undefined,
-    defaultViewport: { width: 1280, height: 900 }
+    ignoreHTTPSErrors: true
   });
-  BROWSER.on('disconnected', () => { BROWSER = null; });
+  
+  BROWSER.on('disconnected', () => { 
+    console.log('[WARN] Navigateur déconnecté');
+    BROWSER = null; 
+  });
+  
+  console.log('[INFO] Navigateur lancé avec succès');
   return BROWSER;
 }
 
-// Helper: créer un contexte/page optimisé
-async function withPage(run, { locale = 'en-US', userAgent, viewport } = {}) {
+// Helper: créer une page avec config anti-détection
+async function withPage(run, { locale = 'en-US', userAgent, viewport, blockResources = false } = {}) {
   const browser = await getBrowser();
   let page;
+  
   try {
     page = await browser.newPage();
 
-    // UA & langue
-    await page.setUserAgent(
-      userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36'
-    );
-    await page.setExtraHTTPHeaders({ 'Accept-Language': locale === 'fr-FR' ? 'fr-FR,fr;q=0.9' : 'en-US,en;q=0.9' });
-    if (viewport) await page.setViewport(viewport);
+    // Configuration viewport
+    await page.setViewport(viewport || { width: 1920, height: 1080 });
 
-    // Blocage ressources lourdes pour accélérer
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const type = req.resourceType();
-      const url = req.url();
-      if (type === 'image' || type === 'media' || type === 'font') return req.abort();
-      if (/(google-analytics|doubleclick|googletagmanager|facebook|ads|beacon)/i.test(url)) return req.abort();
-      return req.continue();
+    // User Agent réaliste
+    await page.setUserAgent(
+      userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    // Headers HTTP réalistes
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': locale === 'fr-FR' ? 'fr-FR,fr;q=0.9,en;q=0.8' : 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1'
     });
 
-    // Timeouts par défaut plus courts
-    page.setDefaultTimeout(5000);
+    // Blocage ressources (optionnel, désactivé par défaut pour Alibaba)
+    if (blockResources) {
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        const type = req.resourceType();
+        const url = req.url();
+        if (type === 'image' || type === 'media' || type === 'font') {
+          return req.abort();
+        }
+        if (/(google-analytics|doubleclick|googletagmanager|facebook|ads|beacon)/i.test(url)) {
+          return req.abort();
+        }
+        return req.continue();
+      });
+    }
 
-    return await run(page, null);
+    // Timeout par défaut plus long pour Alibaba
+    page.setDefaultTimeout(30000);
+
+    // Masquer traces d'automatisation supplémentaires
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false
+      });
+      
+      window.navigator.chrome = {
+        runtime: {}
+      };
+      
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+      });
+      
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en']
+      });
+    });
+
+    return await run(page);
   } finally {
-    // Fermer la page si ouverte
     if (page) await page.close().catch(() => {});
   }
 }
@@ -95,7 +140,8 @@ async function withPage(run, { locale = 'en-US', userAgent, viewport } = {}) {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    service: 'Headless Browser API (Puppeteer)',
+    service: 'Headless Browser API with Stealth',
+    browser: 'Puppeteer + Stealth Plugin',
     endpoints: [
       { path: '/run', method: 'POST', description: 'Exécuter un script (JSON)' },
       { path: '/run-file', method: 'POST', description: 'Exécuter un fichier .js' },
@@ -143,25 +189,34 @@ app.post('/run-file', upload.single('file'), async (req, res) => {
 // Exécution commune avec réutilisation
 // ------------------------------------
 async function executeScript(script, timeout, res) {
+  console.log('[INFO] Exécution du script utilisateur...');
+  
   try {
-    const data = await withPage(async (page, context) => {
+    const data = await withPage(async (page) => {
       // Exécuter le script utilisateur (AsyncFunction)
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      const userFunction = new AsyncFunction('page', 'context', script);
+      const userFunction = new AsyncFunction('page', 'browser', script);
 
       // Course avec timeout
       const result = await Promise.race([
-        userFunction(page, context),
+        userFunction(page, await getBrowser()),
         new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout dépassé')), timeout))
       ]);
 
       return result;
     });
 
+    console.log('[INFO] Script exécuté avec succès');
     res.json({ status: 'success', data: data || { message: 'Script exécuté avec succès' } });
   } catch (error) {
-    console.error('Erreur:', error);
-    res.status(500).json({ status: 'error', error: { message: error.message } });
+    console.error('[ERROR]', error);
+    res.status(500).json({ 
+      status: 'error', 
+      error: { 
+        message: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      } 
+    });
   }
 }
 
@@ -177,16 +232,20 @@ app.use((err, req, res, next) => {
 // Démarrage du serveur
 // ------------------------------------
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Service Headless Browser (Puppeteer) démarré sur le port ${PORT}`);
-  console.log(`📡 Endpoint principal: POST /run`);
+  console.log(`🚀 Service Headless Browser avec Stealth démarré sur le port ${PORT}`);
+  console.log(`📡 Endpoint principal: POST /run et POST /run-file`);
+  console.log(`🛡️ Protection anti-détection: ACTIVÉE`);
 });
 
 // Fermeture propre
 process.on('SIGTERM', async () => {
+  console.log('[INFO] SIGTERM reçu, fermeture du navigateur...');
   if (BROWSER) { try { await BROWSER.close(); } catch (_) {} }
   process.exit(0);
 });
+
 process.on('SIGINT', async () => {
+  console.log('[INFO] SIGINT reçu, fermeture du navigateur...');
   if (BROWSER) { try { await BROWSER.close(); } catch (_) {} }
   process.exit(0);
 });
