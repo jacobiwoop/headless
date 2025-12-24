@@ -58,7 +58,6 @@ async function getBrowser() {
 // Helper: créer un contexte/page optimisé
 async function withPage(run, { locale = 'en-US', userAgent, viewport } = {}) {
   const browser = await getBrowser();
-  // Utilise un onglet (Page) par requête; certains environnements Chrome désactivent l'incognito
   let page;
   try {
     page = await browser.newPage();
@@ -83,10 +82,10 @@ async function withPage(run, { locale = 'en-US', userAgent, viewport } = {}) {
     // Timeouts par défaut plus courts
     page.setDefaultTimeout(5000);
 
-    return await run(page, context);
+    return await run(page, null);
   } finally {
-    // Fermer le contexte (ferme toutes ses pages)
-    await context.close().catch(() => {});
+    // Fermer la page si ouverte
+    if (page) await page.close().catch(() => {});
   }
 }
 
