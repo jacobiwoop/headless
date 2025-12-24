@@ -58,10 +58,10 @@ async function getBrowser() {
 // Helper: créer un contexte/page optimisé
 async function withPage(run, { locale = 'en-US', userAgent, viewport } = {}) {
   const browser = await getBrowser();
-  // Contexte incognito par requête pour isolation
-  const context = await browser.createIncognitoBrowserContext();
+  // Utilise un onglet (Page) par requête; certains environnements Chrome désactivent l'incognito
+  let page;
   try {
-    const page = await context.newPage();
+    page = await browser.newPage();
 
     // UA & langue
     await page.setUserAgent(
